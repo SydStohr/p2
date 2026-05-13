@@ -1350,3 +1350,5 @@ elif page == "👨‍🏫 Instructor view":
         }
 
         st.table(current_kpis)
+        streamlit run linklogistics_app.py
+        
