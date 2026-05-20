@@ -1,7 +1,7 @@
+
 import streamlit as st
 import pandas as pd
 
-# ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Supply Chain Game HAN",
     page_icon="🚚",
@@ -9,17 +9,14 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Session state defaults ───────────────────────────────────────────────────
 defaults = {
-    # General
     "team_name": "GreenRoute Co.",
     "group_name": "Group 4",
     "score": 74,
     "quarter": 3,
     "difficulty": "Medium",
     "current_page": "🏠 Start",
-
-    # Dynamic KPIs
+    "selected_department": "Purchasing",
     "revenue": 3800000,
     "net_profit": 1240000,
     "inventory_value": 860000,
@@ -27,31 +24,30 @@ defaults = {
     "sustainability_score": 76,
     "lead_time_days": 14,
     "risk_level": 42,
-
-    # Event system
     "event": "Port strike in Rotterdam — sea freight lead times +14 days.",
-    "event_label": "Active Black Swan",
+    "event_label": "Quarter 3 - Rotterdam Port Strike",
     "active_event_code": "rotterdam_strike",
+    "manual_event_override": False,
+    "applied_event_quarters": [3],
 
-    # Department decision state
     "purchasing_chosen": None,
     "purchasing_confirmed": False,
+
     "operations_chosen": None,
     "operations_confirmed": False,
+    "operations_stock_settings": None,
+    "operations_pending_impact": None,
+
     "sales_chosen": None,
     "sales_confirmed": False,
     "supply_chain_chosen": None,
     "supply_chain_confirmed": False,
 
-    # Game control
     "game_started": False,
     "game_paused": False,
     "completed_games": [],
-
-    # Decision log
     "decision_log": [],
 
-    # History
     "history": [
         {
             "Quarter": "Q1",
@@ -83,46 +79,150 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 
-# ── Helper functions ─────────────────────────────────────────────────────────
+EVENTS = {
+    1: {
+        "code": "current_state",
+        "title": "Quarter 1 - Current State Analysis",
+        "description": "The new management team analyses the current supply chain.",
+        "learning_objective": "Supply Chain Mapping and KPI Diagnosis",
+        "kpi_modifier": {"risk": 0, "lead_time": 0, "service_level": 0, "esg": 0, "profit": 0},
+    },
+    2: {
+        "code": "supplier_strategy",
+        "title": "Quarter 2 - Supplier Strategy",
+        "description": "Suppliers differ in cost, quality and reliability.",
+        "learning_objective": "Supplier Selection and Sourcing Strategy",
+        "kpi_modifier": {"risk": 5, "lead_time": 3, "service_level": -2, "profit": 20000},
+    },
+    3: {
+        "code": "rotterdam_strike",
+        "title": "Quarter 3 - Rotterdam Port Strike",
+        "description": "Port strike in Rotterdam increases lead times by 14 days.",
+        "learning_objective": "Risk Management and Resilience",
+        "kpi_modifier": {"lead_time": 14, "risk": 12, "service_level": -4, "profit": -80000},
+    },
+    4: {
+        "code": "demand_surge",
+        "title": "Quarter 4 - Demand Surge",
+        "description": "Customer demand increases unexpectedly.",
+        "learning_objective": "Forecasting and Capacity Planning",
+        "kpi_modifier": {"service_level": -5, "inventory": -100000, "profit": 50000},
+    },
+    5: {
+        "code": "sustainability_pressure",
+        "title": "Quarter 5 - Sustainability Pressure",
+        "description": "Customers demand greener sourcing.",
+        "learning_objective": "ESG and Sustainable Supply Chains",
+        "kpi_modifier": {"esg": 8, "profit": -30000, "risk": -2},
+    },
+    6: {
+        "code": "tariff",
+        "title": "Quarter 6 - Tariff Shock",
+        "description": "Import tariffs increase sourcing costs.",
+        "learning_objective": "Global Sourcing and Total Landed Cost",
+        "kpi_modifier": {"profit": -120000, "risk": 4},
+    },
+    7: {
+        "code": "market_volatility",
+        "title": "Quarter 7 - Market Volatility",
+        "description": "Demand becomes highly uncertain.",
+        "learning_objective": "Agility and Flexibility",
+        "kpi_modifier": {"risk": 8, "service_level": -3},
+    },
+    8: {
+        "code": "ceo_challenge",
+        "title": "Quarter 8 - CEO Challenge",
+        "description": "The CEO expects maximum ROI and strategic alignment.",
+        "learning_objective": "Integrated Decision-Making",
+        "kpi_modifier": {"profit": 100000, "risk": -5, "service_level": 3, "esg": 3},
+    },
+}
+
+
+def get_event_for_quarter(quarter):
+    return EVENTS.get(quarter, EVENTS[1])
+
+
+def clamp_kpis():
+    st.session_state.score = max(0, min(100, st.session_state.score))
+    st.session_state.service_level = max(0, min(100, st.session_state.service_level))
+    st.session_state.sustainability_score = max(0, min(100, st.session_state.sustainability_score))
+    st.session_state.risk_level = max(0, min(100, st.session_state.risk_level))
+    st.session_state.lead_time_days = max(1, st.session_state.lead_time_days)
+    st.session_state.inventory_value = max(0, st.session_state.inventory_value)
+
+
+def apply_event_modifiers_to_session_state(quarter):
+    if quarter in st.session_state.applied_event_quarters:
+        return
+
+    event = get_event_for_quarter(quarter)
+    key_map = {
+        "risk": "risk_level",
+        "lead_time": "lead_time_days",
+        "service_level": "service_level",
+        "esg": "sustainability_score",
+        "profit": "net_profit",
+        "inventory": "inventory_value",
+        "revenue": "revenue",
+        "score": "score",
+    }
+
+    for key, change in event["kpi_modifier"].items():
+        session_key = key_map.get(key)
+        if session_key in st.session_state:
+            st.session_state[session_key] += change
+
+    clamp_kpis()
+    st.session_state.applied_event_quarters.append(quarter)
+
+
+def sync_quarter_event():
+    if st.session_state.manual_event_override:
+        return
+
+    event = get_event_for_quarter(st.session_state.quarter)
+    st.session_state.active_event_code = event["code"]
+    st.session_state.event_label = event["title"]
+    st.session_state.event = event["description"]
+
+    apply_event_modifiers_to_session_state(st.session_state.quarter)
+
+
+sync_quarter_event()
+
+
 def money(value):
-    """Formats money values neatly."""
     sign = "−" if value < 0 else ""
     value = abs(int(value))
-
     if value >= 1000000:
         return f"{sign}${value / 1000000:.2f}M"
-    elif value >= 1000:
+    if value >= 1000:
         return f"{sign}${value / 1000:.0f}k"
-    else:
-        return f"{sign}${value}"
+    return f"{sign}${value}"
 
 
 def sustainability_rating(score):
-    """Converts ESG score to a rating."""
     if score >= 90:
         return "A"
-    elif score >= 80:
+    if score >= 80:
         return "B+"
-    elif score >= 70:
+    if score >= 70:
         return "B"
-    elif score >= 60:
+    if score >= 60:
         return "C+"
-    else:
-        return "C"
+    return "C"
 
 
 def risk_label(score):
-    """Converts risk score to a text label."""
     if score <= 30:
         return "Low"
-    elif score <= 60:
+    if score <= 60:
         return "Medium"
-    else:
-        return "High"
+    return "High"
 
 
 def strategy_type():
-    """Gives the team a strategy type based on KPI values."""
     profit = st.session_state.net_profit
     service = st.session_state.service_level
     esg = st.session_state.sustainability_score
@@ -131,45 +231,35 @@ def strategy_type():
 
     if service >= 90 and risk <= 35:
         return "Resilient Strategist", "You protected delivery reliability and reduced supply chain risk."
-    elif esg >= 85:
+    if esg >= 85:
         return "Green Leader", "You made sustainable choices and improved ESG performance."
-    elif profit >= 1350000 and risk >= 55:
+    if profit >= 1350000 and risk >= 55:
         return "Risk Taker", "You protected short-term profit but accepted higher supply chain risk."
-    elif inventory >= 1050000:
+    if inventory >= 1050000:
         return "Inventory Hoarder", "You reduced stockout risk, but inventory and holding costs are becoming high."
-    elif profit >= 1350000:
+    if profit >= 1350000:
         return "Cost Controller", "You controlled costs well and protected financial performance."
-    else:
-        return "Balanced Operator", "You made balanced decisions across profit, service, ESG and risk."
+    return "Balanced Operator", "You made balanced decisions across profit, service, ESG and risk."
 
 
 def get_forecast_tolerance():
     if st.session_state.difficulty == "Easy":
         return 20
-    elif st.session_state.difficulty == "Hard":
+    if st.session_state.difficulty == "Hard":
         return 10
     return 15
 
 
-def apply_kpi_change(
-    score=0,
-    profit=0,
-    revenue=0,
-    inventory=0,
-    service=0,
-    sustainability=0,
-    lead_time=0,
-    risk=0,
-):
-    """Applies KPI changes after a player decision."""
-    st.session_state.score = max(0, min(100, st.session_state.score + score))
+def apply_kpi_change(score=0, profit=0, revenue=0, inventory=0, service=0, sustainability=0, lead_time=0, risk=0):
+    st.session_state.score += score
     st.session_state.net_profit += profit
     st.session_state.revenue += revenue
-    st.session_state.inventory_value = max(0, st.session_state.inventory_value + inventory)
-    st.session_state.service_level = max(0, min(100, st.session_state.service_level + service))
-    st.session_state.sustainability_score = max(0, min(100, st.session_state.sustainability_score + sustainability))
-    st.session_state.lead_time_days = max(1, st.session_state.lead_time_days + lead_time)
-    st.session_state.risk_level = max(0, min(100, st.session_state.risk_level + risk))
+    st.session_state.inventory_value += inventory
+    st.session_state.service_level += service
+    st.session_state.sustainability_score += sustainability
+    st.session_state.lead_time_days += lead_time
+    st.session_state.risk_level += risk
+    clamp_kpis()
 
     return {
         "Score": score,
@@ -184,7 +274,6 @@ def apply_kpi_change(
 
 
 def record_decision(area, choice, concept, impact):
-    """Stores decision history for the summary page."""
     st.session_state.decision_log.append(
         {
             "Quarter": f"Q{st.session_state.quarter}",
@@ -204,9 +293,7 @@ def record_decision(area, choice, concept, impact):
 
 
 def add_current_quarter_to_history():
-    """Saves the current quarter results to history before advancing."""
     current_q = f"Q{st.session_state.quarter}"
-
     current_data = {
         "Quarter": current_q,
         "Revenue": st.session_state.revenue,
@@ -220,7 +307,6 @@ def add_current_quarter_to_history():
     }
 
     existing_quarters = [row["Quarter"] for row in st.session_state.history]
-
     if current_q in existing_quarters:
         index = existing_quarters.index(current_q)
         st.session_state.history[index] = current_data
@@ -229,11 +315,12 @@ def add_current_quarter_to_history():
 
 
 def reset_quarter_games():
-    """Resets all decision confirmations for a new quarter."""
     st.session_state.purchasing_chosen = None
     st.session_state.purchasing_confirmed = False
     st.session_state.operations_chosen = None
     st.session_state.operations_confirmed = False
+    st.session_state.operations_stock_settings = None
+    st.session_state.operations_pending_impact = None
     st.session_state.sales_chosen = None
     st.session_state.sales_confirmed = False
     st.session_state.supply_chain_chosen = None
@@ -241,27 +328,48 @@ def reset_quarter_games():
     st.session_state.completed_games = []
 
 
+def apply_operations_pending_stock_impact():
+    """
+    Operations stock slider results are applied only when the quarter is finished.
+    This prevents students from seeing the result immediately after confirming.
+    """
+    impact = st.session_state.operations_pending_impact
+
+    if impact is None:
+        return
+
+    choice_text = st.session_state.operations_chosen or "Stock level determination"
+    applied = apply_kpi_change(
+        score=impact["Score"],
+        profit=impact["Profit"],
+        revenue=impact["Revenue"],
+        inventory=impact["Inventory"],
+        service=impact["Service"],
+        sustainability=impact["ESG"],
+        lead_time=impact["Lead Time"],
+        risk=impact["Risk"],
+    )
+    record_decision("Operations", choice_text, "Stock determination", applied)
+    st.session_state.operations_pending_impact = None
+
+
 def show_quarter_summary():
-    """Saves the current quarter and opens the hidden Quarter Summary screen."""
+    apply_operations_pending_stock_impact()
     add_current_quarter_to_history()
     st.session_state.current_page = "📋 Quarter Summary"
     st.rerun()
 
 
 def continue_to_next_quarter():
-    """Moves from the Quarter Summary to the next playable quarter."""
     if st.session_state.quarter < 8:
         st.session_state.quarter += 1
-
-        # Small automatic market change for the new quarter
         st.session_state.revenue = int(st.session_state.revenue * 1.04)
         st.session_state.net_profit = int(st.session_state.net_profit * 1.02)
-
-        # Slightly normalize some KPIs
         st.session_state.lead_time_days = max(8, int(st.session_state.lead_time_days * 0.95))
         st.session_state.risk_level = max(20, int(st.session_state.risk_level * 0.95))
-
         reset_quarter_games()
+        st.session_state.manual_event_override = False
+        sync_quarter_event()
         st.session_state.current_page = "📝 Decision Log"
     else:
         st.session_state.current_page = "🏁 Final Report"
@@ -270,14 +378,10 @@ def continue_to_next_quarter():
 
 
 def current_quarter_decisions():
-    return [
-        row for row in st.session_state.decision_log
-        if row["Quarter"] == f"Q{st.session_state.quarter}"
-    ]
+    return [row for row in st.session_state.decision_log if row["Quarter"] == f"Q{st.session_state.quarter}"]
 
 
 def make_decision_table(rows):
-    """Formats decision log for a cleaner display."""
     formatted = []
 
     for row in rows:
@@ -301,38 +405,12 @@ def make_decision_table(rows):
     return formatted
 
 
-def make_decision_dataframe(rows):
-    """Creates a dataframe for a neater Streamlit table."""
-    return pd.DataFrame(make_decision_table(rows))
-
-
 def show_clean_decision_table(rows):
-    """Displays the decision log in a wider and cleaner dataframe."""
-    df = make_decision_dataframe(rows)
-
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Quarter": st.column_config.TextColumn("Quarter", width="small"),
-            "Department": st.column_config.TextColumn("Department", width="medium"),
-            "Decision": st.column_config.TextColumn("Decision", width="large"),
-            "Concept": st.column_config.TextColumn("Concept", width="medium"),
-            "Score": st.column_config.NumberColumn("Score", width="small"),
-            "Profit": st.column_config.TextColumn("Profit", width="small"),
-            "Revenue": st.column_config.TextColumn("Revenue", width="small"),
-            "Inventory": st.column_config.TextColumn("Inventory", width="small"),
-            "Service": st.column_config.TextColumn("Service", width="small"),
-            "ESG": st.column_config.TextColumn("ESG", width="small"),
-            "Lead Time": st.column_config.TextColumn("Lead Time", width="small"),
-            "Risk": st.column_config.TextColumn("Risk", width="small"),
-        },
-    )
+    df = pd.DataFrame(make_decision_table(rows))
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
 
 def quarter_kpi_comment():
-    """Creates a short readable quarter summary."""
     score = st.session_state.score
     service = st.session_state.service_level
     risk = st.session_state.risk_level
@@ -375,47 +453,253 @@ def quarter_kpi_comment():
 
 def get_current_event_note():
     code = st.session_state.active_event_code
+    event = get_event_for_quarter(st.session_state.quarter)
 
+    if code == "current_state":
+        return "The company is analysing its current supply chain. The focus is on understanding KPIs and identifying bottlenecks."
+    if code == "supplier_strategy":
+        return "Suppliers differ in cost, quality and reliability. Purchasing decisions should balance cost savings and supply risk."
     if code == "rotterdam_strike":
         return "Sea freight through Rotterdam is disrupted. Alternative routes and reliable suppliers become more attractive."
-    elif code == "suez_blockage":
+    if code == "demand_surge":
+        return "Customer demand increases unexpectedly. Production capacity, inventory and sales promises are under pressure."
+    if code == "sustainability_pressure":
+        return "Customers demand greener sourcing. ESG performance becomes more important, but sustainable choices may affect costs."
+    if code == "tariff":
+        return "Foreign sourcing is more expensive. Purchasing decisions should consider local alternatives, split sourcing or total landed cost."
+    if code == "market_volatility":
+        return "Demand is highly uncertain. The company needs flexibility in production, inventory and sales decisions."
+    if code == "ceo_challenge":
+        return "The CEO expects strong ROI and alignment between departments. Integrated decision-making is essential."
+    if code == "suez_blockage":
         return "Global sea freight is disrupted. Transport and supply chain decisions should avoid heavy dependence on sea routes."
-    elif code == "tariff":
-        return "Foreign sourcing is more expensive. Purchasing decisions should consider local alternatives or split sourcing."
-    elif code == "taiwan_fire":
+    if code == "taiwan_fire":
         return "Component availability is low. Inventory and supplier reliability are extra important."
-    elif code == "currency_shock":
+    if code == "currency_shock":
         return "Currency movement hurts margins. Cost control and pricing decisions matter more."
-    elif code == "pandemic":
+    if code == "pandemic":
         return "Demand is unstable. Sales promises and inventory levels should be managed carefully."
-    elif code == "labour_strike":
+    if code == "labour_strike":
         return "Road logistics are delayed. Lead time and service level are under pressure."
-    return "No special event active."
+
+    return event["learning_objective"]
+
+
+def calculate_stock_slider_impact(slider_values):
+    """
+    Scores slider-based stock targets.
+    Target is based on demand + safety stock.
+    Too low = stockout / service risk.
+    Too high = obsolete inventory and holding cost.
+    """
+    products = get_operations_products()
+    total_score = 0
+    total_profit = 0
+    total_inventory = 0
+    total_service = 0
+    total_risk = 0
+    total_lead_time = 0
+
+    comments = []
+
+    for product in products:
+        name = product["Product"]
+        current = product["Current stock"]
+        demand = product["Expected demand"]
+        safety = product["Safety stock"]
+        target = demand + safety
+        chosen = slider_values[name]
+        deviation = chosen - target
+        deviation_pct = deviation / target
+
+        inventory_change_units = chosen - current
+        total_inventory += inventory_change_units * product["Unit value"]
+
+        if abs(deviation_pct) <= 0.10:
+            total_score += 3
+            total_profit += 20000
+            total_service += 2
+            total_risk -= 2
+            comments.append(f"{name}: stock target is close to the required level.")
+        elif deviation_pct < -0.10:
+            shortage_units = target - chosen
+            total_score -= 3
+            total_profit -= int(shortage_units * product["Stockout cost"])
+            total_service -= 4
+            total_risk += 5
+            total_lead_time += 1
+            comments.append(f"{name}: stock is too low, creating stockout risk.")
+        else:
+            excess_units = chosen - target
+            total_score -= 2
+            total_profit -= int(excess_units * product["Holding/obsolete cost"])
+            total_service += 1
+            total_risk += 1
+            comments.append(f"{name}: stock is too high, increasing holding and obsolete inventory risk.")
+
+    impact = {
+        "Score": total_score,
+        "Profit": total_profit,
+        "Revenue": 0,
+        "Inventory": total_inventory,
+        "Service": total_service,
+        "ESG": 0,
+        "Lead Time": total_lead_time,
+        "Risk": total_risk,
+        "Comments": comments,
+    }
+
+    return impact
+
+
+def get_operations_products():
+    """
+    Creates product data for the Operations stock slider.
+    The stock situation is recalculated every quarter, so warnings and tips change during the game.
+    """
+    base = [
+        {
+            "Product": "FreshMix 250ml",
+            "Base stock": 12000,
+            "Base demand": 18000,
+            "Base safety stock": 3000,
+            "Unit value": 8,
+            "Stockout cost": 12,
+            "Holding/obsolete cost": 4,
+        },
+        {
+            "Product": "FreshMix 500ml",
+            "Base stock": 26000,
+            "Base demand": 24000,
+            "Base safety stock": 4000,
+            "Unit value": 10,
+            "Stockout cost": 14,
+            "Holding/obsolete cost": 5,
+        },
+        {
+            "Product": "FreshMix 1L",
+            "Base stock": 8000,
+            "Base demand": 13500,
+            "Base safety stock": 2500,
+            "Unit value": 14,
+            "Stockout cost": 18,
+            "Holding/obsolete cost": 7,
+        },
+    ]
+
+    quarter = st.session_state.quarter
+    event = st.session_state.active_event_code
+
+    # Demand changes slightly over time, so each quarter feels different.
+    quarter_demand_factor = 1 + max(0, quarter - 3) * 0.04
+
+    # Current stock is influenced by the company's total inventory value.
+    inventory_factor = st.session_state.inventory_value / 860000
+    inventory_factor = max(0.65, min(1.45, inventory_factor))
+
+    products = []
+
+    for index, product in enumerate(base):
+        demand = int(product["Base demand"] * quarter_demand_factor)
+        safety_stock = int(product["Base safety stock"])
+        current_stock = int(product["Base stock"] * inventory_factor)
+
+        # Small product-specific quarter pattern to avoid all products moving in the same direction.
+        if quarter % 3 == 1 and index == 0:
+            demand = int(demand * 1.12)
+        elif quarter % 3 == 2 and index == 1:
+            demand = int(demand * 1.10)
+        elif quarter % 3 == 0 and index == 2:
+            demand = int(demand * 1.13)
+
+        if event == "demand_surge":
+            demand = int(demand * 1.18)
+        if event in ["market_volatility", "pandemic"]:
+            safety_stock = int(safety_stock * 1.25)
+        if event in ["rotterdam_strike", "suez_blockage", "labour_strike"]:
+            safety_stock = int(safety_stock * 1.15)
+        if event == "tariff":
+            current_stock = int(current_stock * 0.92)
+        if event == "sustainability_pressure":
+            safety_stock = int(safety_stock * 0.95)
+
+        products.append(
+            {
+                "Product": product["Product"],
+                "Current stock": current_stock,
+                "Expected demand": demand,
+                "Safety stock": safety_stock,
+                "Unit value": product["Unit value"],
+                "Stockout cost": product["Stockout cost"],
+                "Holding/obsolete cost": product["Holding/obsolete cost"],
+            }
+        )
+
+    return products
+
+
+def get_stock_status(product):
+    """Returns a status and tip based on the current stock position for one product."""
+    current = product["Current stock"]
+    demand = product["Expected demand"]
+    safety = product["Safety stock"]
+    target = demand + safety
+
+    if current < demand:
+        return (
+            "Low stock",
+            "Current stock is below expected demand. There is a clear stockout risk if no action is taken.",
+        )
+    if current < target:
+        return (
+            "Below target",
+            "Current stock covers expected demand, but not the recommended safety stock. A slightly higher target may protect service level.",
+        )
+    if current > target * 1.25:
+        return (
+            "Too high",
+            "Current stock is far above the recommended level. This can increase holding costs and obsolete inventory risk.",
+        )
+    return (
+        "Healthy",
+        "Current stock is close to the recommended level. Keep the target near demand plus safety stock.",
+    )
+
+
+def render_operations_tips(products):
+    """Shows fresh stock tips every quarter before the sliders are used."""
+    low_or_high = []
+
+    for product in products:
+        status, tip = get_stock_status(product)
+        if status != "Healthy":
+            low_or_high.append((product["Product"], status, tip))
+
+    if not low_or_high:
+        st.success("Operations tip: stock levels look fairly balanced this quarter. Try to stay close to demand plus safety stock.")
+        return
+
+    st.markdown("### Operations tips for this quarter")
+    for product_name, status, tip in low_or_high:
+        if status in ["Low stock", "Below target"]:
+            st.warning(f"{product_name}: {status}. {tip}")
+        else:
+            st.info(f"{product_name}: {status}. {tip}")
 
 
 # ── Custom CSS ───────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
-
-html, body, [class*="css"] { 
-    font-family: 'DM Sans', sans-serif; 
-}
-
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 [data-testid="metric-container"] {
     background: #FFFFFF;
     border: 1px solid rgba(28,27,25,0.12);
     border-radius: 12px;
     padding: 16px 18px;
 }
-
-section[data-testid="stSidebar"] {
-    background: #1C1B19 !important;
-}
-section[data-testid="stSidebar"] * { 
-    color: #E8E6E0 !important; 
-}
-
+section[data-testid="stSidebar"] { background: #1C1B19 !important; }
+section[data-testid="stSidebar"] * { color: #E8E6E0 !important; }
 .stButton > button {
     border-radius: 8px;
     font-family: 'DM Sans', sans-serif;
@@ -425,14 +709,8 @@ section[data-testid="stSidebar"] * {
     border: 1px solid rgba(28,27,25,0.2);
     transition: all 0.15s;
 }
-.stButton > button:hover { 
-    border-color: rgba(28,27,25,0.5); 
-}
-
-.stProgress > div > div { 
-    background-color: #185FA5 !important; 
-}
-
+.stButton > button:hover { border-color: rgba(28,27,25,0.5); }
+.stProgress > div > div { background-color: #185FA5 !important; }
 .event-banner {
     background: #FAEEDA;
     border: 1px solid #EF9F27;
@@ -442,107 +720,77 @@ section[data-testid="stSidebar"] * {
     font-size: 14px;
     color: #412402;
 }
-.event-label { 
-    font-weight: 600; 
-    font-size: 11px; 
-    text-transform: uppercase; 
-    letter-spacing: 0.5px; 
-    color: #633806; 
+.event-label {
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #633806;
 }
-
 .result-correct {
-    background: #EAF3DE; 
-    border: 1px solid #97C459; 
+    background: #EAF3DE;
+    border: 1px solid #97C459;
     border-radius: 10px;
-    padding: 14px 16px; 
-    font-size: 13px; 
-    color: #173404; 
-    margin-top: 12px; 
+    padding: 14px 16px;
+    font-size: 13px;
+    color: #173404;
+    margin-top: 12px;
     line-height: 1.6;
 }
 .result-wrong {
-    background: #FAECE7; 
-    border: 1px solid #F09595; 
+    background: #FAECE7;
+    border: 1px solid #F09595;
     border-radius: 10px;
-    padding: 14px 16px; 
-    font-size: 13px; 
-    color: #501313; 
-    margin-top: 12px; 
+    padding: 14px 16px;
+    font-size: 13px;
+    color: #501313;
+    margin-top: 12px;
     line-height: 1.6;
 }
 .result-neutral {
-    background: #E6F1FB; 
-    border: 1px solid #8BBBE8; 
+    background: #E6F1FB;
+    border: 1px solid #8BBBE8;
     border-radius: 10px;
-    padding: 14px 16px; 
-    font-size: 13px; 
-    color: #0C447C; 
-    margin-top: 12px; 
+    padding: 14px 16px;
+    font-size: 13px;
+    color: #0C447C;
+    margin-top: 12px;
     line-height: 1.6;
 }
-
 .white-card {
-    background: #FFFFFF; 
+    background: #FFFFFF;
     border: 1px solid rgba(28,27,25,0.12);
-    border-radius: 12px; 
-    padding: 18px 20px; 
+    border-radius: 12px;
+    padding: 18px 20px;
     margin-bottom: 16px;
 }
+.white-card h1,
+.white-card h2,
+.white-card h3,
+.white-card h4 {
+    color: #1C1B19 !important;
+    font-weight: 700;
+}
+.white-card p,
+.white-card div,
+.white-card span {
+    color: #5F5E5A;
+}
 .card-label {
-    font-size: 11px; 
-    font-weight: 600; 
+    font-size: 11px;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.6px; 
-    color: #888780; 
+    letter-spacing: 0.6px;
+    color: #888780;
     margin-bottom: 12px;
 }
-.kpi-note {
-    color: #5F5E5A;
-    font-size: 13px;
-    line-height: 1.5;
-}
-.badge-blue {
-    background:#E6F1FB;
-    color:#0C447C;
-    border-radius:6px;
-    padding:3px 9px;
-    font-size:12px;
-    font-weight:500;
-}
-.badge-orange {
-    background:#FAEEDA;
-    color:#633806;
-    border-radius:6px;
-    padding:3px 9px;
-    font-size:12px;
-    font-weight:500;
-}
-.badge-red {
-    background:#FAECE7;
-    color:#993C1D;
-    border-radius:6px;
-    padding:3px 9px;
-    font-size:12px;
-    font-weight:500;
-}
-.badge-green {
-    background:#EAF3DE;
-    color:#0F6E56;
-    border-radius:6px;
-    padding:3px 9px;
-    font-size:12px;
-    font-weight:500;
-}
-.big-title {
-    font-size: 44px;
-    font-weight: 700;
-    margin-bottom: 4px;
-}
-.subtitle {
-    font-size: 17px;
-    color: #5F5E5A;
-    line-height: 1.6;
-}
+.kpi-note { color: #5F5E5A; font-size: 13px; line-height: 1.5; }
+.badge-blue { background:#E6F1FB; color:#0C447C; border-radius:6px; padding:3px 9px; font-size:12px; font-weight:500; }
+.badge-orange { background:#FAEEDA; color:#633806; border-radius:6px; padding:3px 9px; font-size:12px; font-weight:500; }
+.badge-red { background:#FAECE7; color:#993C1D; border-radius:6px; padding:3px 9px; font-size:12px; font-weight:500; }
+.badge-green { background:#EAF3DE; color:#0F6E56; border-radius:6px; padding:3px 9px; font-size:12px; font-weight:500; }
+.big-title { font-size: 44px; font-weight: 700; margin-bottom: 4px; }
+.subtitle { font-size: 17px; color: #5F5E5A; line-height: 1.6; }
 .department-card {
     background: #FFFFFF;
     border: 1px solid rgba(28,27,25,0.12);
@@ -580,15 +828,8 @@ with st.sidebar:
 
     st.markdown("---")
 
-    st.session_state.team_name = st.text_input(
-        "Team name",
-        value=st.session_state.team_name,
-    )
-
-    st.session_state.group_name = st.text_input(
-        "Group",
-        value=st.session_state.group_name,
-    )
+    st.session_state.team_name = st.text_input("Team name", value=st.session_state.team_name)
+    st.session_state.group_name = st.text_input("Group", value=st.session_state.group_name)
 
     st.markdown(f"**{st.session_state.team_name}** · {st.session_state.group_name}")
     st.markdown(f"Quarter {st.session_state.quarter} of 8")
@@ -607,9 +848,6 @@ with st.sidebar:
         st.warning("⏸ Game is paused")
 
 
-# ═══════════════════════════════════════════════════════
-# PAGE: START
-# ═══════════════════════════════════════════════════════
 if page == "🏠 Start":
     st.markdown('<div class="big-title">🚚 Supply Chain Game HAN</div>', unsafe_allow_html=True)
     st.markdown(
@@ -633,7 +871,7 @@ Each quarter, your team makes decisions for four departments:
 - **Sales**
 - **Supply Chain**
 
-Every department decision changes your KPIs. The goal is not only to make profit, but also to keep customers satisfied, manage risk, improve sustainability and maintain a reliable supply chain.
+Every department decision changes your KPIs. Some decisions are multiple choice, while others require an estimation, such as determining the right stock level with sliders.
         """)
 
         if st.button("▶️ Start game"):
@@ -667,13 +905,11 @@ Build the strongest supply chain by Quarter 8.
     <div class="event-label">🔴 {st.session_state.event_label}</div>
     <div style="margin-top:4px;">{st.session_state.event}</div>
     <div style="margin-top:6px;"><strong>Meaning:</strong> {get_current_event_note()}</div>
+    <div style="margin-top:6px;"><strong>Learning objective:</strong> {get_event_for_quarter(st.session_state.quarter)["learning_objective"]}</div>
 </div>
 """, unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════════════════════
-# PAGE: DASHBOARD
-# ═══════════════════════════════════════════════════════
 elif page == "📊 Dashboard":
     st.title(f"Quarter {st.session_state.quarter} Overview")
 
@@ -682,47 +918,20 @@ elif page == "📊 Dashboard":
         <div class="event-label">🔴 {st.session_state.event_label}</div>
         <div style="margin-top:4px;">{st.session_state.event}</div>
         <div style="margin-top:6px;"><strong>Decision context:</strong> {get_current_event_note()}</div>
+        <div style="margin-top:6px;"><strong>Learning objective:</strong> {get_event_for_quarter(st.session_state.quarter)["learning_objective"]}</div>
     </div>
     """, unsafe_allow_html=True)
 
     c1, c2, c3, c4 = st.columns(4)
-
-    with c1:
-        st.metric("Global Efficiency Score", f"{st.session_state.score}/100", "Dynamic")
-
-    with c2:
-        st.metric("Net Profit", money(st.session_state.net_profit), "Affected by decisions")
-
-    with c3:
-        st.metric(
-            "Inventory Value",
-            money(st.session_state.inventory_value),
-            "Holding cost impact",
-            delta_color="inverse",
-        )
-
-    with c4:
-        st.metric(
-            "Sustainability Rating",
-            sustainability_rating(st.session_state.sustainability_score),
-            f"{st.session_state.sustainability_score}/100 ESG",
-        )
+    c1.metric("Global Efficiency Score", f"{st.session_state.score}/100", "Dynamic")
+    c2.metric("Net Profit", money(st.session_state.net_profit), "Affected by decisions")
+    c3.metric("Inventory Value", money(st.session_state.inventory_value), "Holding cost impact", delta_color="inverse")
+    c4.metric("Sustainability Rating", sustainability_rating(st.session_state.sustainability_score), f"{st.session_state.sustainability_score}/100 ESG")
 
     k1, k2, k3 = st.columns(3)
-
-    with k1:
-        st.metric("Service Level", f"{st.session_state.service_level}%", "Delivery reliability")
-
-    with k2:
-        st.metric("Average Lead Time", f"{st.session_state.lead_time_days} days", "Lower is better")
-
-    with k3:
-        st.metric(
-            "Supply Chain Risk",
-            f"{st.session_state.risk_level}/100",
-            risk_label(st.session_state.risk_level),
-            delta_color="inverse",
-        )
+    k1.metric("Service Level", f"{st.session_state.service_level}%", "Delivery reliability")
+    k2.metric("Average Lead Time", f"{st.session_state.lead_time_days} days", "Lower is better")
+    k3.metric("Supply Chain Risk", f"{st.session_state.risk_level}/100", risk_label(st.session_state.risk_level), delta_color="inverse")
 
     st.markdown("---")
 
@@ -731,16 +940,11 @@ elif page == "📊 Dashboard":
     with col_left:
         st.markdown('<div class="white-card"><div class="card-label">Inventory Levels</div>', unsafe_allow_html=True)
 
-        raw_materials = min(100, max(0, int(st.session_state.inventory_value / 12000)))
-        work_in_progress = min(100, max(0, int(st.session_state.service_level * 0.65)))
-        finished_goods = min(100, max(0, int(100 - st.session_state.risk_level * 0.8)))
-        safety_stock = min(100, max(0, int(st.session_state.inventory_value / 15000)))
-
         inventory = {
-            "Raw materials": raw_materials,
-            "Work in progress": work_in_progress,
-            "Finished goods": finished_goods,
-            "Safety stock": safety_stock,
+            "Raw materials": min(100, max(0, int(st.session_state.inventory_value / 12000))),
+            "Work in progress": min(100, max(0, int(st.session_state.service_level * 0.65))),
+            "Finished goods": min(100, max(0, int(100 - st.session_state.risk_level * 0.8))),
+            "Safety stock": min(100, max(0, int(st.session_state.inventory_value / 15000))),
         }
 
         for name, pct in inventory.items():
@@ -762,7 +966,6 @@ elif page == "📊 Dashboard":
             ("FastLink", 69, False),
             ("ChainMasters", 61, False),
         ]
-
         leaderboard = sorted(leaderboard, key=lambda x: x[1], reverse=True)
 
         for i, (name, score, is_you) in enumerate(leaderboard, start=1):
@@ -823,16 +1026,12 @@ elif page == "📊 Dashboard":
         st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
-
     st.markdown("### Decision Progress")
     completed = len(st.session_state.completed_games)
     st.progress(completed / 4)
     st.caption(f"{completed}/4 department decisions completed this quarter.")
 
 
-# ═══════════════════════════════════════════════════════
-# PAGE: DECISION LOG
-# ═══════════════════════════════════════════════════════
 elif page == "📝 Decision Log":
     st.title("Decision Log")
     st.caption(f"Make one management decision for each department · Q{st.session_state.quarter}")
@@ -845,6 +1044,7 @@ elif page == "📝 Decision Log":
     <div class="event-label">🔴 Current event</div>
     <div style="margin-top:4px;">{st.session_state.event}</div>
     <div style="margin-top:6px;"><strong>Meaning:</strong> {get_current_event_note()}</div>
+    <div style="margin-top:6px;"><strong>Learning objective:</strong> {get_event_for_quarter(st.session_state.quarter)["learning_objective"]}</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -852,20 +1052,24 @@ elif page == "📝 Decision Log":
     departments = ["Purchasing", "Operations", "Sales", "Supply Chain"]
 
     cols = st.columns(4)
-
     for i, (col, department) in enumerate(zip(cols, departments)):
         status = "✅" if department in done else ("🔵" if i == len(done) else "⚪")
-        col.markdown(f"{status} **{department}**")
+        is_selected = st.session_state.selected_department == department
+        button_type = "primary" if is_selected else "secondary"
+
+        if col.button(
+            f"{status} {department}",
+            key=f"department_button_{department}",
+            use_container_width=True,
+            type=button_type,
+        ):
+            st.session_state.selected_department = department
+            st.rerun()
 
     st.markdown("---")
 
-    department_tab = st.selectbox(
-        "Choose a department:",
-        departments,
-        label_visibility="collapsed",
-    )
+    department_tab = st.session_state.selected_department
 
-    # ── DEPARTMENT 1: PURCHASING ─────────────────────────────────────────────
     if department_tab == "Purchasing":
         st.subheader("🏭 Purchasing Department")
         st.markdown('<span class="badge-orange">Supplier strategy</span>', unsafe_allow_html=True)
@@ -910,23 +1114,9 @@ The company currently buys many components from a low-cost overseas supplier. Th
 
             if "Purchasing" not in st.session_state.completed_games:
                 if choice == "Split purchasing between both suppliers":
-                    impact = apply_kpi_change(
-                        score=8,
-                        profit=-60000,
-                        service=5,
-                        sustainability=2,
-                        lead_time=-2,
-                        risk=-8,
-                    )
+                    impact = apply_kpi_change(score=8, profit=-60000, service=5, sustainability=2, lead_time=-2, risk=-8)
                 elif choice == "Switch to the reliable European supplier":
-                    impact = apply_kpi_change(
-                        score=6,
-                        profit=-90000,
-                        service=7,
-                        sustainability=4,
-                        lead_time=-4,
-                        risk=-9,
-                    )
+                    impact = apply_kpi_change(score=6, profit=-90000, service=7, sustainability=4, lead_time=-4, risk=-9)
                 else:
                     impact = apply_kpi_change(
                         score=-5 if port_disruption or tariff_active else -2,
@@ -942,132 +1132,107 @@ The company currently buys many components from a low-cost overseas supplier. Th
                 st.session_state.completed_games.append("Purchasing")
 
         if st.session_state.purchasing_confirmed:
-            ch = st.session_state.purchasing_chosen
+            st.markdown("""
+            <div class="result-neutral">
+            Decision saved. The purchasing impact is included in the quarter results. Review the complete KPI effect after finishing the quarter.
+            </div>
+            """, unsafe_allow_html=True)
 
-            if ch == "Split purchasing between both suppliers":
-                st.markdown("""
-                <div class="result-correct">
-                ✅ <strong>Balanced purchasing decision.</strong> Splitting the order reduces dependency on one supplier and improves resilience.
-                <br><br>
-                <strong>Management insight:</strong> Purchasing is not only about lowest price. Supplier reliability, risk exposure and lead time also influence total supply chain performance.
-                </div>
-                """, unsafe_allow_html=True)
-            elif ch == "Switch to the reliable European supplier":
-                st.markdown("""
-                <div class="result-neutral">
-                ℹ️ <strong>Reliable but more expensive.</strong> This decision protects service level and lead time, but reduces short-term profit.
-                <br><br>
-                <strong>Management insight:</strong> A higher purchase price can be acceptable when it prevents delays, stockouts and emergency costs.
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                <div class="result-wrong">
-                ⚠️ <strong>Cost-focused but risky.</strong> The low-cost supplier protects the purchase price, but increases disruption exposure.
-                <br><br>
-                <strong>Management insight:</strong> A cheap supplier can become expensive when delays and stockouts are included.
-                </div>
-                """, unsafe_allow_html=True)
-
-    # ── DEPARTMENT 2: OPERATIONS ─────────────────────────────────────────────
     elif department_tab == "Operations":
         st.subheader("⚙️ Operations Department")
-        st.markdown('<span class="badge-green">Capacity planning</span>', unsafe_allow_html=True)
+        st.markdown('<span class="badge-green">Stock determination</span>', unsafe_allow_html=True)
+
+        demand_pressure = st.session_state.active_event_code in ["demand_surge", "pandemic", "market_volatility"]
 
         st.markdown("""
 ### Current situation
-Operations is under pressure. Sales expects more orders next quarter, while current production capacity is almost fully used.
+Operations is reviewing the stock levels for three products. Some products are running low, while others may already have more stock than needed.
 
-The operations manager warns that if production capacity is not adjusted, delivery times may increase. However, adding capacity also increases costs. The team must decide how operations should prepare for the next quarter.
+For each product, determine the **target stock level for next period**.  
+A stock level that is too low can create stockouts and lower service level.  
+A stock level that is too high increases holding costs and obsolete inventory risk.
+
+The exact KPI result is **not shown immediately**. It will be applied and shown after finishing the quarter.
         """)
 
-        options = {
-            "Keep current production capacity": "No extra cost, but a higher risk of late deliveries if demand increases.",
-            "Use overtime for the next quarter": "Temporary capacity increase with higher labour costs.",
-            "Invest in extra production capacity": "High short-term cost, but improves future capacity and delivery reliability.",
-        }
+        if demand_pressure:
+            st.warning("Demand uncertainty is high this quarter. The required safety stock is higher than normal.")
 
-        choice = st.radio(
-            "Operations decision:",
-            list(options.keys()),
-            key="operations_decision_radio",
-            disabled=st.session_state.operations_confirmed,
-        )
+        products = get_operations_products()
+        render_operations_tips(products)
 
-        st.caption(options[choice])
+        product_table = []
+        for product in products:
+            status, tip = get_stock_status(product)
+            product_table.append(
+                {
+                    "Product": product["Product"],
+                    "Current stock": f"{product['Current stock']:,}",
+                    "Expected demand": f"{product['Expected demand']:,}",
+                    "Recommended safety stock": f"{product['Safety stock']:,}",
+                    "Theoretical target": f"{product['Expected demand'] + product['Safety stock']:,}",
+                    "Status": status,
+                    "Tip": tip,
+                }
+            )
+
+        st.markdown("### Product information")
+        st.dataframe(pd.DataFrame(product_table), use_container_width=True, hide_index=True)
+
+        st.markdown("### Set target stock level")
+
+        slider_values = {}
+
+        for product in products:
+            name = product["Product"]
+            target = product["Expected demand"] + product["Safety stock"]
+            min_value = 0
+            max_value = int(target * 1.8)
+            default_value = int(product["Current stock"])
+
+            slider_values[name] = st.slider(
+                f"{name} target stock",
+                min_value=min_value,
+                max_value=max_value,
+                value=min(default_value, max_value),
+                step=500,
+                disabled=st.session_state.operations_confirmed or st.session_state.game_paused,
+                key=f"stock_slider_{name}_{st.session_state.quarter}",
+            )
 
         if st.button(
-            "✅ Confirm operations decision",
-            key="confirm_operations",
+            "✅ Confirm operations stock plan",
+            key="confirm_operations_stock",
             disabled=st.session_state.operations_confirmed or st.session_state.game_paused,
         ):
+            impact = calculate_stock_slider_impact(slider_values)
+
             st.session_state.operations_confirmed = True
-            st.session_state.operations_chosen = choice
+            st.session_state.operations_stock_settings = slider_values
+            st.session_state.operations_pending_impact = impact
+            st.session_state.operations_chosen = "Stock targets: " + ", ".join(
+                [f"{product} {amount:,}" for product, amount in slider_values.items()]
+            )
 
             if "Operations" not in st.session_state.completed_games:
-                if choice == "Use overtime for the next quarter":
-                    impact = apply_kpi_change(
-                        score=6,
-                        profit=-70000,
-                        service=6,
-                        lead_time=-3,
-                        risk=-4,
-                    )
-                elif choice == "Invest in extra production capacity":
-                    impact = apply_kpi_change(
-                        score=8,
-                        profit=-180000,
-                        service=8,
-                        sustainability=1,
-                        lead_time=-5,
-                        risk=-6,
-                    )
-                else:
-                    impact = apply_kpi_change(
-                        score=-4,
-                        profit=30000,
-                        service=-7,
-                        lead_time=4,
-                        risk=6,
-                    )
-
-                record_decision("Operations", choice, "Capacity planning", impact)
                 st.session_state.completed_games.append("Operations")
 
+            st.success("Operations stock plan saved. The KPI consequences will be shown after finishing the quarter.")
+
         if st.session_state.operations_confirmed:
-            ch = st.session_state.operations_chosen
+            st.markdown("""
+            <div class="result-neutral">
+            ✅ <strong>Stock plan saved.</strong><br><br>
+            The result is hidden for now. After finishing the quarter, the game will compare your target stock levels with demand and safety stock. 
+            If stock is too low, service level and risk will be affected. If stock is too high, profit and inventory value will be affected.
+            </div>
+            """, unsafe_allow_html=True)
 
-            if ch == "Use overtime for the next quarter":
-                st.markdown("""
-                <div class="result-correct">
-                ✅ <strong>Flexible operations decision.</strong> Overtime gives extra capacity without a major long-term investment.
-                <br><br>
-                <strong>Management insight:</strong> Overtime is useful when demand pressure is temporary, but it should not become a permanent solution.
-                </div>
-                """, unsafe_allow_html=True)
-            elif ch == "Invest in extra production capacity":
-                st.markdown("""
-                <div class="result-neutral">
-                ℹ️ <strong>Strong long-term decision.</strong> Extra capacity improves service and lead time, but it is expensive in the short term.
-                <br><br>
-                <strong>Management insight:</strong> Capacity investments are valuable when demand growth is expected to continue.
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                <div class="result-wrong">
-                ⚠️ <strong>Low-cost but risky.</strong> Keeping capacity unchanged saves money now, but can hurt lead time and service level.
-                <br><br>
-                <strong>Management insight:</strong> Operations must balance cost efficiency with delivery reliability.
-                </div>
-                """, unsafe_allow_html=True)
-
-    # ── DEPARTMENT 3: SALES ──────────────────────────────────────────────────
     elif department_tab == "Sales":
         st.subheader("📈 Sales Department")
         st.markdown('<span class="badge-blue">Customer demand</span>', unsafe_allow_html=True)
 
-        demand_shock = st.session_state.active_event_code == "pandemic"
+        demand_shock = st.session_state.active_event_code in ["pandemic", "demand_surge", "market_volatility"]
 
         st.markdown("""
 ### Current situation
@@ -1104,63 +1269,29 @@ Accepting the request could increase revenue, but it also creates pressure on pu
 
             if "Sales" not in st.session_state.completed_games:
                 if choice == "Accept part of the extra demand":
-                    impact = apply_kpi_change(
-                        score=7,
-                        profit=90000,
-                        revenue=160000,
-                        service=3,
-                        risk=-2,
-                    )
+                    impact = apply_kpi_change(score=8 if demand_shock else 7, profit=90000, revenue=160000, service=3, risk=-2)
                 elif choice == "Accept all extra customer demand":
                     impact = apply_kpi_change(
-                        score=-2,
+                        score=-4 if demand_shock else -2,
                         profit=130000,
                         revenue=260000,
-                        service=-7,
-                        lead_time=4,
-                        risk=7,
+                        service=-9 if demand_shock else -7,
+                        lead_time=5 if demand_shock else 4,
+                        risk=9 if demand_shock else 7,
                     )
                 else:
-                    impact = apply_kpi_change(
-                        score=-3,
-                        profit=-60000,
-                        revenue=-140000,
-                        service=2,
-                        risk=-3,
-                    )
+                    impact = apply_kpi_change(score=-3, profit=-60000, revenue=-140000, service=2, risk=-3)
 
                 record_decision("Sales", choice, "Customer demand", impact)
                 st.session_state.completed_games.append("Sales")
 
         if st.session_state.sales_confirmed:
-            ch = st.session_state.sales_chosen
+            st.markdown("""
+            <div class="result-neutral">
+            Decision saved. Review the full KPI effect after finishing the quarter.
+            </div>
+            """, unsafe_allow_html=True)
 
-            if ch == "Accept part of the extra demand":
-                st.markdown("""
-                <div class="result-correct">
-                ✅ <strong>Balanced sales decision.</strong> The company grows revenue without putting too much pressure on operations.
-                <br><br>
-                <strong>Management insight:</strong> Sales promises should match what the supply chain can actually deliver.
-                </div>
-                """, unsafe_allow_html=True)
-            elif ch == "Accept all extra customer demand":
-                st.markdown("""
-                <div class="result-wrong">
-                ⚠️ <strong>Ambitious but risky.</strong> Revenue increases, but the company may struggle to deliver everything on time.
-                <br><br>
-                <strong>Management insight:</strong> Commercial growth can damage service level if operations and supply chain are not prepared.
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                <div class="result-neutral">
-                ℹ️ <strong>Safe but conservative.</strong> Rejecting demand protects operations, but limits growth and profit.
-                <br><br>
-                <strong>Management insight:</strong> Avoiding risk can be useful, but it can also mean missing strategic opportunities.
-                </div>
-                """, unsafe_allow_html=True)
-
-    # ── DEPARTMENT 4: SUPPLY CHAIN ───────────────────────────────────────────
     elif department_tab == "Supply Chain":
         st.subheader("🚚 Supply Chain Department")
         st.markdown('<span class="badge-red">Network resilience</span>', unsafe_allow_html=True)
@@ -1205,23 +1336,9 @@ The current network is cost-efficient, but disruptions are increasing. The team 
 
             if "Supply Chain" not in st.session_state.completed_games:
                 if choice == "Use a balanced multimodal route":
-                    impact = apply_kpi_change(
-                        score=8,
-                        profit=-50000,
-                        service=5,
-                        sustainability=4,
-                        lead_time=-2,
-                        risk=-7,
-                    )
+                    impact = apply_kpi_change(score=8, profit=-50000, service=5, sustainability=4, lead_time=-2, risk=-7)
                 elif choice == "Use the fastest transport route":
-                    impact = apply_kpi_change(
-                        score=-1,
-                        profit=-120000,
-                        service=8,
-                        sustainability=-8,
-                        lead_time=-6,
-                        risk=-3,
-                    )
+                    impact = apply_kpi_change(score=-1, profit=-120000, service=8, sustainability=-8, lead_time=-6, risk=-3)
                 else:
                     impact = apply_kpi_change(
                         score=-5 if sea_disrupted or labour_disrupted else 2,
@@ -1237,43 +1354,18 @@ The current network is cost-efficient, but disruptions are increasing. The team 
                 st.session_state.completed_games.append("Supply Chain")
 
         if st.session_state.supply_chain_confirmed:
-            ch = st.session_state.supply_chain_chosen
+            st.markdown("""
+            <div class="result-neutral">
+            Decision saved. Review the full KPI effect after finishing the quarter.
+            </div>
+            """, unsafe_allow_html=True)
 
-            if ch == "Use a balanced multimodal route":
-                st.markdown("""
-                <div class="result-correct">
-                ✅ <strong>Resilient supply chain decision.</strong> A balanced multimodal route protects service level while keeping costs and emissions under control.
-                <br><br>
-                <strong>Management insight:</strong> Supply chain decisions are about total performance, not only transport price.
-                </div>
-                """, unsafe_allow_html=True)
-            elif ch == "Use the fastest transport route":
-                st.markdown("""
-                <div class="result-neutral">
-                ℹ️ <strong>Fast but costly.</strong> The fastest route improves delivery performance, but reduces profit and sustainability.
-                <br><br>
-                <strong>Management insight:</strong> Speed can be valuable, but it should be used where customer value justifies the extra cost.
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                <div class="result-wrong">
-                ⚠️ <strong>Cheap but exposed.</strong> The cheapest route saves money, but disruption risk can damage lead time and service level.
-                <br><br>
-                <strong>Management insight:</strong> The cheapest logistics option is not always the best option after delay risk is included.
-                </div>
-                """, unsafe_allow_html=True)
-
-    # ── FINISH QUARTER BUTTON ────────────────────────────────────────────────
     st.markdown("---")
 
     completed = len(st.session_state.completed_games)
 
     if completed < 4:
-        st.info(
-            f"Complete all four departments before finishing the quarter. "
-            f"Progress: {completed}/4 department decisions completed."
-        )
+        st.info(f"Complete all four departments before finishing the quarter. Progress: {completed}/4 department decisions completed.")
     else:
         st.success("All four department decisions have been completed. You can now finish this quarter.")
 
@@ -1281,9 +1373,6 @@ The current network is cost-efficient, but disruptions are increasing. The team 
             show_quarter_summary()
 
 
-# ═══════════════════════════════════════════════════════
-# HIDDEN PAGE: QUARTER SUMMARY
-# ═══════════════════════════════════════════════════════
 elif page == "📋 Quarter Summary":
     st.title(f"Quarter {st.session_state.quarter} Summary")
     st.caption("Review this quarter first. Then continue to the next quarter.")
@@ -1296,6 +1385,7 @@ elif page == "📋 Quarter Summary":
     <div class="event-label">Quarter context</div>
     <div style="margin-top:4px;">{st.session_state.event}</div>
     <div style="margin-top:6px;"><strong>Meaning:</strong> {get_current_event_note()}</div>
+    <div style="margin-top:6px;"><strong>Learning objective:</strong> {get_event_for_quarter(st.session_state.quarter)["learning_objective"]}</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1307,10 +1397,7 @@ elif page == "📋 Quarter Summary":
         st.caption(f"{completed}/4 department decisions completed this quarter.")
 
     with col_status:
-        if completed < 4:
-            st.warning("Quarter not fully completed.")
-        else:
-            st.success("Quarter completed.")
+        st.success("Quarter completed." if completed == 4 else "Quarter not fully completed.")
 
     st.markdown("---")
 
@@ -1364,7 +1451,6 @@ elif page == "📋 Quarter Summary":
     st.markdown("---")
 
     st.markdown("### Group reflection")
-
     st.markdown("""
 Use these questions to discuss the quarter with your group:
 
@@ -1384,9 +1470,6 @@ Use these questions to discuss the quarter with your group:
             continue_to_next_quarter()
 
 
-# ═══════════════════════════════════════════════════════
-# PAGE: FINANCIALS
-# ═══════════════════════════════════════════════════════
 elif page == "💰 Financials":
     st.title("Financial Statements")
     st.caption("Auto-generated based on current KPI performance and player decisions.")
@@ -1463,7 +1546,6 @@ elif page == "💰 Financials":
                 )
 
     st.markdown("---")
-
     st.markdown("### Quarter-by-Quarter Performance")
 
     performance_rows = []
@@ -1474,40 +1556,42 @@ elif page == "💰 Financials":
     current_q = f"Q{st.session_state.quarter}"
 
     if current_q not in [row["Quarter"] for row in st.session_state.history]:
-        performance_rows.append({
-            "Quarter": f"{current_q} current",
-            "Revenue": st.session_state.revenue,
-            "Net Profit": st.session_state.net_profit,
-            "Efficiency Score": st.session_state.score,
-            "Service Level": st.session_state.service_level,
-            "ESG Score": st.session_state.sustainability_score,
-            "Inventory Value": st.session_state.inventory_value,
-            "Risk Level": st.session_state.risk_level,
-            "Lead Time": st.session_state.lead_time_days,
-        })
+        performance_rows.append(
+            {
+                "Quarter": f"{current_q} current",
+                "Revenue": st.session_state.revenue,
+                "Net Profit": st.session_state.net_profit,
+                "Efficiency Score": st.session_state.score,
+                "Service Level": st.session_state.service_level,
+                "ESG Score": st.session_state.sustainability_score,
+                "Inventory Value": st.session_state.inventory_value,
+                "Risk Level": st.session_state.risk_level,
+                "Lead Time": st.session_state.lead_time_days,
+            }
+        )
 
     formatted_rows = []
     for row in performance_rows:
-        formatted_rows.append({
-            "Quarter": row["Quarter"],
-            "Revenue": money(row["Revenue"]),
-            "Net Profit": money(row["Net Profit"]),
-            "Efficiency Score": row["Efficiency Score"],
-            "Service Level": f"{row['Service Level']}%",
-            "ESG Score": row["ESG Score"],
-            "Inventory Value": money(row["Inventory Value"]),
-            "Risk Level": row["Risk Level"],
-            "Lead Time": row["Lead Time"],
-        })
+        formatted_rows.append(
+            {
+                "Quarter": row["Quarter"],
+                "Revenue": money(row["Revenue"]),
+                "Net Profit": money(row["Net Profit"]),
+                "Efficiency Score": row["Efficiency Score"],
+                "Service Level": f"{row['Service Level']}%",
+                "ESG Score": row["ESG Score"],
+                "Inventory Value": money(row["Inventory Value"]),
+                "Risk Level": row["Risk Level"],
+                "Lead Time": row["Lead Time"],
+            }
+        )
 
     st.dataframe(pd.DataFrame(formatted_rows), use_container_width=True, hide_index=True)
 
     st.markdown("---")
-
     st.markdown("### KPI Charts")
 
-    chart_df = pd.DataFrame(performance_rows)
-    chart_df = chart_df.set_index("Quarter")
+    chart_df = pd.DataFrame(performance_rows).set_index("Quarter")
 
     col_chart1, col_chart2 = st.columns(2)
 
@@ -1526,7 +1610,6 @@ elif page == "💰 Financials":
         st.line_chart(chart_df["Risk Level"])
 
     st.markdown("---")
-
     st.markdown("### Decision History")
 
     if st.session_state.decision_log:
@@ -1535,9 +1618,6 @@ elif page == "💰 Financials":
         st.info("No decisions have been logged yet.")
 
 
-# ═══════════════════════════════════════════════════════
-# PAGE: FINAL REPORT
-# ═══════════════════════════════════════════════════════
 elif page == "🏁 Final Report":
     st.title("Final Company Report")
 
@@ -1581,7 +1661,6 @@ elif page == "🏁 Final Report":
         st.markdown("❌ **Weak performance.** Your supply chain strategy needs major improvement.")
 
     st.markdown("---")
-
     st.markdown("### Complete decision history")
 
     if st.session_state.decision_log:
@@ -1590,9 +1669,6 @@ elif page == "🏁 Final Report":
         st.info("No decisions have been logged yet.")
 
 
-# ═══════════════════════════════════════════════════════
-# PAGE: INSTRUCTOR
-# ═══════════════════════════════════════════════════════
 elif page == "👨‍🏫 Instructor view":
     st.title("Instructor — God Mode")
     st.markdown('<span class="badge-red">Instructor only</span>', unsafe_allow_html=True)
@@ -1652,6 +1728,7 @@ elif page == "👨‍🏫 Instructor view":
             c1.markdown(f"**{name}**  \n{info['desc']}")
 
             if c2.button("Trigger", key=f"ev_{name}"):
+                st.session_state.manual_event_override = True
                 st.session_state.active_event_code = info["code"]
                 st.session_state.event_label = f"⚡ {info['label']}"
                 st.session_state.event = info["desc"]
@@ -1698,31 +1775,12 @@ elif page == "👨‍🏫 Instructor view":
             st.rerun()
 
         st.markdown("---")
-
         st.markdown("### 📊 Current Team Performance")
 
         teams = [
-            {
-                "Team": "Team Apex",
-                "Score": 91,
-                "Profit": "$1.82M",
-                "ESG": "A",
-                "Service": "94%",
-            },
-            {
-                "Team": "NovaTrade",
-                "Score": 88,
-                "Profit": "$1.71M",
-                "ESG": "B+",
-                "Service": "91%",
-            },
-            {
-                "Team": "LogiX Group",
-                "Score": 83,
-                "Profit": "$1.58M",
-                "ESG": "B",
-                "Service": "89%",
-            },
+            {"Team": "Team Apex", "Score": 91, "Profit": "$1.82M", "ESG": "A", "Service": "94%"},
+            {"Team": "NovaTrade", "Score": 88, "Profit": "$1.71M", "ESG": "B+", "Service": "91%"},
+            {"Team": "LogiX Group", "Score": 83, "Profit": "$1.58M", "ESG": "B", "Service": "89%"},
             {
                 "Team": f"⭐ {st.session_state.team_name}",
                 "Score": st.session_state.score,
@@ -1730,20 +1788,8 @@ elif page == "👨‍🏫 Instructor view":
                 "ESG": sustainability_rating(st.session_state.sustainability_score),
                 "Service": f"{st.session_state.service_level}%",
             },
-            {
-                "Team": "FastLink",
-                "Score": 69,
-                "Profit": "$1.10M",
-                "ESG": "C+",
-                "Service": "78%",
-            },
-            {
-                "Team": "ChainMasters",
-                "Score": 61,
-                "Profit": "−$220k",
-                "ESG": "C",
-                "Service": "67%",
-            },
+            {"Team": "FastLink", "Score": 69, "Profit": "$1.10M", "ESG": "C+", "Service": "78%"},
+            {"Team": "ChainMasters", "Score": 61, "Profit": "−$220k", "ESG": "C", "Service": "67%"},
         ]
 
         st.dataframe(pd.DataFrame(teams), use_container_width=True, hide_index=True)
@@ -1761,6 +1807,7 @@ elif page == "👨‍🏫 Instructor view":
                 "Supply Chain Risk",
                 "Active Event",
                 "Difficulty",
+                "Learning Objective",
             ],
             "Value": [
                 money(st.session_state.revenue),
@@ -1772,6 +1819,7 @@ elif page == "👨‍🏫 Instructor view":
                 f"{st.session_state.risk_level}/100",
                 st.session_state.event_label,
                 st.session_state.difficulty,
+                get_event_for_quarter(st.session_state.quarter)["learning_objective"],
             ],
         }
 
