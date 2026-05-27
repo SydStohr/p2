@@ -12,23 +12,43 @@ st.set_page_config(
 defaults = {
     "team_name": "GreenRoute Co.",
     "group_name": "Group 4",
-    "score": 74,
-    "quarter": 3,
+    "score": 62,
+    "quarter": 1,
     "difficulty": "Medium",
     "current_page": "🏠 Start",
     "selected_department": "Purchasing",
-    "revenue": 3800000,
-    "net_profit": 1240000,
-    "inventory_value": 860000,
-    "service_level": 87,
-    "sustainability_score": 76,
-    "lead_time_days": 14,
-    "risk_level": 42,
-    "event": "Port strike in Rotterdam — sea freight lead times +14 days.",
-    "event_label": "Quarter 3 - Rotterdam Port Strike",
-    "active_event_code": "rotterdam_strike",
+    "role_mode_enabled": False,
+    "student_department_role": "Team view",
+
+    # Instructor locking system
+    "lock_dashboard": False,
+    "lock_decision_log": False,
+    "lock_financials": False,
+    "lock_final_report": False,
+    "lock_quarter_summary": False,
+    "lock_finish_quarter": False,
+    "lock_peer_comparison": False,
+    "lock_kpi_impacts": False,
+    "lock_message": "This section is currently locked by the instructor. Please wait for the next instruction.",
+    "class_phase": "Decision round",
+    "department_locks": {
+        "Purchasing": False,
+        "Operations": False,
+        "Sales": False,
+        "Supply Chain": False,
+    },
+    "revenue": 3200000,
+    "net_profit": 900000,
+    "inventory_value": 720000,
+    "service_level": 78,
+    "sustainability_score": 68,
+    "lead_time_days": 18,
+    "risk_level": 52,
+    "event": "The new management team analyses the current supply chain.",
+    "event_label": "Quarter 1 - Current State Analysis",
+    "active_event_code": "current_state",
     "manual_event_override": False,
-    "applied_event_quarters": [3],
+    "applied_event_quarters": [],
 
     "purchasing_chosen": None,
     "purchasing_confirmed": False,
@@ -48,30 +68,7 @@ defaults = {
     "completed_games": [],
     "decision_log": [],
 
-    "history": [
-        {
-            "Quarter": "Q1",
-            "Revenue": 3200000,
-            "Net Profit": 900000,
-            "Efficiency Score": 62,
-            "Service Level": 78,
-            "ESG Score": 68,
-            "Inventory Value": 720000,
-            "Risk Level": 52,
-            "Lead Time": 18,
-        },
-        {
-            "Quarter": "Q2",
-            "Revenue": 3550000,
-            "Net Profit": 1030000,
-            "Efficiency Score": 68,
-            "Service Level": 82,
-            "ESG Score": 72,
-            "Inventory Value": 790000,
-            "Risk Level": 47,
-            "Lead Time": 16,
-        },
-    ],
+    "history": [],
 }
 
 for k, v in defaults.items():
@@ -587,6 +584,12 @@ def make_decision_table(rows):
 
 def show_clean_decision_table(rows):
     df = pd.DataFrame(make_decision_table(rows))
+
+    if st.session_state.get("lock_kpi_impacts", False) and not is_instructor_unlocked():
+        safe_columns = ["Quarter", "Department", "Decision", "Concept"]
+        df = df[[col for col in safe_columns if col in df.columns]]
+        st.info("KPI impact details are locked by the instructor. The decision overview is visible, but the exact effects are hidden for now.")
+
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 
@@ -867,6 +870,469 @@ def render_operations_tips(products):
             st.info(f"{product_name}: {status}. {tip}")
 
 
+
+# ── Instructor Locking System ────────────────────────────────────────────────
+def is_instructor_unlocked():
+    """Returns True when the instructor has unlocked the instructor background."""
+    return st.session_state.get("instructor_authenticated", False)
+
+
+def is_page_locked(page_name):
+    """
+    Checks whether a page is locked for students.
+    Instructor view remains reachable because it contains the password screen.
+    """
+    if page_name == "👨‍🏫 Instructor view":
+        return False
+
+    if is_instructor_unlocked():
+        return False
+
+    page_lock_map = {
+        "📊 Dashboard": "lock_dashboard",
+        "📝 Decision Log": "lock_decision_log",
+        "📋 Quarter Summary": "lock_quarter_summary",
+        "💰 Financials": "lock_financials",
+        "🏁 Final Report": "lock_final_report",
+    }
+
+    lock_key = page_lock_map.get(page_name)
+    return bool(st.session_state.get(lock_key, False)) if lock_key else False
+
+
+def is_department_locked(department_name):
+    """
+    Checks whether a department is locked in the Decision Log.
+    The instructor can still see locked departments after logging in.
+    """
+    if is_instructor_unlocked():
+        return False
+
+    locks = st.session_state.get("department_locks", {})
+    return bool(locks.get(department_name, False))
+
+
+def get_department_role():
+    """
+    Role selection is no longer controlled by students.
+    The instructor now controls playable departments by locking or unlocking departments.
+    """
+    return "Team view"
+
+
+def is_role_limited():
+    """Student-side role limiting is disabled. Department access is controlled by instructor locks."""
+    return False
+
+
+def get_playable_departments():
+    """
+    Returns the departments students are allowed to play this round.
+
+    If the instructor locks Operations, Sales and Supply Chain, only Purchasing remains playable.
+    The game then only requires the Purchasing decision before students can finish the round.
+    """
+    departments = ["Purchasing", "Operations", "Sales", "Supply Chain"]
+    locks = st.session_state.get("department_locks", {})
+
+    playable = [department for department in departments if not bool(locks.get(department, False))]
+
+    return playable
+
+
+def get_round_scope_label():
+    """Creates a readable label for the departments that are playable this round."""
+    playable = get_playable_departments()
+
+    if len(playable) == 4:
+        return "Full team round: all departments are playable."
+    if len(playable) == 0:
+        return "No departments are currently playable. The instructor needs to unlock at least one department."
+    if len(playable) == 1:
+        return f"Single-department round: only {playable[0]} is playable."
+
+    return "Multi-department round: " + ", ".join(playable) + " are playable."
+
+
+def get_required_departments_for_round():
+    """Departments that must be completed before the round can be finished."""
+    playable = get_playable_departments()
+
+    if not playable:
+        return ["Purchasing", "Operations", "Sales", "Supply Chain"]
+
+    return playable
+
+
+def get_completed_required_departments():
+    """Required departments that have already been completed."""
+    required = get_required_departments_for_round()
+    return [department for department in required if department in st.session_state.completed_games]
+
+
+def is_round_complete():
+    """
+    Checks whether the current round can be finished.
+
+    This fixes the situation where the instructor only unlocks one department,
+    for example Purchasing. In that case, students only need to complete Purchasing.
+    """
+    required = get_required_departments_for_round()
+
+    if not required:
+        return False
+
+    return all(department in st.session_state.completed_games for department in required)
+
+
+def is_department_access_locked(department_name):
+    """
+    A department is locked when the instructor locks it.
+    Instructor mode bypasses the lock, so the teacher can still inspect everything.
+    """
+    return is_department_locked(department_name)
+
+
+def get_department_lock_reason(department_name):
+    """Explains why a department is locked for the current student."""
+    if is_department_locked(department_name):
+        return f"{department_name} Department is locked by the instructor"
+
+    return f"{department_name} Department is locked"
+
+
+def get_active_locks():
+    """Returns a readable list of active locks for the sidebar and instructor panel."""
+    active = []
+
+    page_labels = {
+        "lock_dashboard": "Dashboard",
+        "lock_decision_log": "Decision Log",
+        "lock_financials": "Financials",
+        "lock_final_report": "Final Report",
+        "lock_quarter_summary": "Quarter Summary",
+        "lock_finish_quarter": "Finish Quarter",
+        "lock_peer_comparison": "Class Comparison",
+        "lock_kpi_impacts": "KPI Impact Details",
+    }
+
+    for key, label in page_labels.items():
+        if st.session_state.get(key, False):
+            active.append(label)
+
+    for department, locked in st.session_state.get("department_locks", {}).items():
+        if locked:
+            active.append(f"{department} Department")
+
+    return active
+
+
+def render_locked_message(title="Locked by instructor"):
+    """Shows a consistent locked screen."""
+    st.markdown("## 🔒 " + title)
+    st.markdown(
+        f"""
+<div class="locked-card">
+    <strong>{st.session_state.get("class_phase", "Class phase")}</strong><br><br>
+    {st.session_state.get("lock_message", "This section is locked by the instructor.")}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    st.info("Ask the instructor to unlock this section when the class is ready to continue.")
+
+
+def set_lock_values(
+    dashboard=None,
+    decision_log=None,
+    financials=None,
+    final_report=None,
+    quarter_summary=None,
+    finish_quarter=None,
+    peer_comparison=None,
+    kpi_impacts=None,
+    class_phase=None,
+):
+    """
+    Updates lock values safely from button callbacks.
+
+    Important Streamlit detail:
+    each checkbox also has its own widget key, for example cb_lock_dashboard.
+    If only lock_dashboard is changed, the visible checkbox can stay checked
+    because Streamlit keeps the widget key value. Therefore this function updates
+    both the real lock value and the matching checkbox widget key.
+    """
+    updates = {
+        "lock_dashboard": dashboard,
+        "lock_decision_log": decision_log,
+        "lock_financials": financials,
+        "lock_final_report": final_report,
+        "lock_quarter_summary": quarter_summary,
+        "lock_finish_quarter": finish_quarter,
+        "lock_peer_comparison": peer_comparison,
+        "lock_kpi_impacts": kpi_impacts,
+    }
+
+    widget_key_map = {
+        "lock_dashboard": "cb_lock_dashboard",
+        "lock_decision_log": "cb_lock_decision_log",
+        "lock_financials": "cb_lock_financials",
+        "lock_final_report": "cb_lock_final_report",
+        "lock_quarter_summary": "cb_lock_quarter_summary",
+        "lock_finish_quarter": "cb_lock_finish_quarter",
+        "lock_peer_comparison": "cb_lock_peer_comparison",
+        "lock_kpi_impacts": "cb_lock_kpi_impacts",
+    }
+
+    for key, value in updates.items():
+        if value is not None:
+            st.session_state[key] = value
+            st.session_state[widget_key_map[key]] = value
+
+    if class_phase is not None:
+        st.session_state.class_phase = class_phase
+        st.session_state.class_phase_select = class_phase
+
+
+def set_department_lock_values(purchasing=None, operations=None, sales=None, supply_chain=None):
+    """
+    Updates department lock values and the matching checkbox widget keys.
+    This makes quick-mode buttons visually update the department checkboxes too.
+    """
+    updates = {
+        "Purchasing": purchasing,
+        "Operations": operations,
+        "Sales": sales,
+        "Supply Chain": supply_chain,
+    }
+
+    if "department_locks" not in st.session_state:
+        st.session_state.department_locks = {
+            "Purchasing": False,
+            "Operations": False,
+            "Sales": False,
+            "Supply Chain": False,
+        }
+
+    for department, value in updates.items():
+        if value is not None:
+            st.session_state.department_locks[department] = value
+            st.session_state[f"cb_lock_department_{department}"] = value
+
+
+def unlock_all_locks():
+    """Unlocks all pages, departments and feedback settings safely."""
+    set_lock_values(
+        dashboard=False,
+        decision_log=False,
+        financials=False,
+        final_report=False,
+        quarter_summary=False,
+        finish_quarter=False,
+        peer_comparison=False,
+        kpi_impacts=False,
+        class_phase="Decision round",
+    )
+
+    set_department_lock_values(
+        purchasing=False,
+        operations=False,
+        sales=False,
+        supply_chain=False,
+    )
+
+
+def set_decision_round_mode():
+    """Typical mode while students are making decisions."""
+    set_lock_values(
+        dashboard=False,
+        decision_log=False,
+        financials=True,
+        final_report=True,
+        quarter_summary=True,
+        finish_quarter=False,
+        peer_comparison=True,
+        kpi_impacts=True,
+        class_phase="Decision round",
+    )
+
+    set_department_lock_values(
+        purchasing=False,
+        operations=False,
+        sales=False,
+        supply_chain=False,
+    )
+
+
+def set_review_mode():
+    """Typical mode while the instructor reviews results with the class."""
+    set_lock_values(
+        dashboard=False,
+        decision_log=True,
+        financials=False,
+        final_report=True,
+        quarter_summary=False,
+        finish_quarter=True,
+        peer_comparison=False,
+        kpi_impacts=False,
+        class_phase="Review round",
+    )
+
+    set_department_lock_values(
+        purchasing=True,
+        operations=True,
+        sales=True,
+        supply_chain=True,
+    )
+
+
+def render_lock_panel():
+    """Instructor controls for locking and unlocking pages, departments and feedback."""
+    st.markdown("### 🔐 Instructor Lock Panel")
+    st.caption(
+        "Use these controls to guide the class. Locks are dynamic and can be changed during the simulation. "
+        "While you are logged in as instructor, locks are bypassed for you. Use 'Preview as student' in the sidebar to test them."
+    )
+
+    st.markdown("#### Quick modes")
+    c1, c2, c3 = st.columns(3)
+
+    c1.button(
+        "🔓 Unlock everything",
+        use_container_width=True,
+        on_click=unlock_all_locks,
+    )
+
+    c2.button(
+        "🎓 Decision-round mode",
+        use_container_width=True,
+        on_click=set_decision_round_mode,
+    )
+
+    c3.button(
+        "🔍 Review mode",
+        use_container_width=True,
+        on_click=set_review_mode,
+    )
+
+    st.session_state.class_phase = st.selectbox(
+        "Class phase",
+        ["Briefing", "Decision round", "Review round", "Final presentation"],
+        index=["Briefing", "Decision round", "Review round", "Final presentation"].index(
+            st.session_state.get("class_phase", "Decision round")
+        ),
+        key="class_phase_select",
+    )
+
+    st.session_state.lock_message = st.text_area(
+        "Message shown to students when something is locked",
+        value=st.session_state.get(
+            "lock_message",
+            "This section is currently locked by the instructor. Please wait for the next instruction.",
+        ),
+        height=80,
+        key="lock_message_input",
+    )
+
+    st.markdown("#### Page locks")
+    p1, p2 = st.columns(2)
+
+    with p1:
+        st.session_state.lock_dashboard = st.checkbox(
+            "Lock Dashboard",
+            value=st.session_state.lock_dashboard,
+            key="cb_lock_dashboard",
+        )
+        st.session_state.lock_decision_log = st.checkbox(
+            "Lock Decision Log",
+            value=st.session_state.lock_decision_log,
+            key="cb_lock_decision_log",
+        )
+        st.session_state.lock_financials = st.checkbox(
+            "Lock Financials",
+            value=st.session_state.lock_financials,
+            key="cb_lock_financials",
+        )
+
+    with p2:
+        st.session_state.lock_final_report = st.checkbox(
+            "Lock Final Report",
+            value=st.session_state.lock_final_report,
+            key="cb_lock_final_report",
+        )
+        st.session_state.lock_quarter_summary = st.checkbox(
+            "Lock Quarter Summary",
+            value=st.session_state.lock_quarter_summary,
+            key="cb_lock_quarter_summary",
+        )
+        st.session_state.lock_finish_quarter = st.checkbox(
+            "Lock Finish Quarter button",
+            value=st.session_state.lock_finish_quarter,
+            key="cb_lock_finish_quarter",
+        )
+
+    st.markdown("#### Department locks")
+    dcols = st.columns(4)
+    departments = ["Purchasing", "Operations", "Sales", "Supply Chain"]
+
+    for col, department in zip(dcols, departments):
+        with col:
+            widget_key = f"cb_lock_department_{department}"
+            current_value = st.session_state.department_locks.get(department, False)
+            st.session_state.department_locks[department] = st.checkbox(
+                department,
+                value=current_value,
+                key=widget_key,
+            )
+
+    st.markdown("#### Playable department setup")
+    playable_departments = get_playable_departments()
+    required_departments = get_required_departments_for_round()
+
+    if len(playable_departments) == 0:
+        st.error("No departments are currently playable for students. Unlock at least one department to start a playable round.")
+    else:
+        st.markdown(
+            f"""
+<div class="instructor-info-card">
+<strong>{get_round_scope_label()}</strong><br><br>
+Students only need to complete the unlocked department(s) before they can finish the round.
+This makes it possible to run a one-role session, for example an <strong>Operations-only</strong> round.
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+    st.caption(
+        "Tip: for a group-of-four setup, open the game on four devices and lock three departments on each device. "
+        "For example, one device has only Purchasing unlocked, another only Operations, another only Sales and another only Supply Chain."
+    )
+
+    st.markdown("#### Feedback locks")
+    f1, f2 = st.columns(2)
+
+    with f1:
+        st.session_state.lock_kpi_impacts = st.checkbox(
+            "Hide KPI impact details from students",
+            value=st.session_state.lock_kpi_impacts,
+            key="cb_lock_kpi_impacts",
+        )
+
+    with f2:
+        st.session_state.lock_peer_comparison = st.checkbox(
+            "Hide class comparison from students",
+            value=st.session_state.lock_peer_comparison,
+            key="cb_lock_peer_comparison",
+        )
+
+    active_locks = get_active_locks()
+
+    if active_locks:
+        st.warning("Active locks: " + ", ".join(active_locks))
+    else:
+        st.success("No active locks. Students can access all main sections.")
+
+
 # ── Custom CSS ───────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -979,6 +1445,78 @@ section[data-testid="stSidebar"] * { color: #E8E6E0 !important; }
     margin-top: 12px;
     margin-bottom: 16px;
 }
+.locked-card {
+    background: #FAECE7;
+    border: 1px solid #F09595;
+    border-radius: 12px;
+    padding: 18px 20px;
+    color: #501313;
+    line-height: 1.6;
+    margin-top: 12px;
+    margin-bottom: 16px;
+}
+.locked-card strong {
+    color: #993C1D;
+}
+.lock-status-card {
+    background: #E6F1FB;
+    border: 1px solid #8BBBE8;
+    border-radius: 10px;
+    padding: 10px 12px;
+    color: #0C447C;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+/* Make lock/status messages readable inside the dark sidebar. */
+section[data-testid="stSidebar"] .lock-status-card {
+    background: #F3F8FF !important;
+    border: 1px solid #8BBBE8 !important;
+    color: #0C447C !important;
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    line-height: 1.45 !important;
+}
+section[data-testid="stSidebar"] .lock-status-card * {
+    color: #0C447C !important;
+}
+section[data-testid="stSidebar"] .role-card {
+    background: #171F2D !important;
+    border: 1px solid rgba(255,255,255,0.18) !important;
+    border-radius: 10px;
+    padding: 10px 12px;
+    color: #E8E6E0 !important;
+    font-size: 13px;
+    line-height: 1.45;
+}
+section[data-testid="stSidebar"] .role-card strong {
+    color: #FFFFFF !important;
+}
+
+.instructor-info-card {
+    background: #F3F8FF;
+    border: 1px solid #8BBBE8;
+    border-radius: 10px;
+    padding: 12px 14px;
+    color: #0C447C;
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 8px;
+}
+.instructor-info-card strong {
+    color: #0C447C;
+}
+.round-scope-card {
+    background: #F3F8FF;
+    border: 1px solid #8BBBE8;
+    border-radius: 10px;
+    padding: 12px 14px;
+    color: #0C447C;
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 16px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -999,12 +1537,29 @@ with st.sidebar:
 
     for nav_page in nav_pages:
         button_type = "primary" if st.session_state.current_page == nav_page else "secondary"
+        locked = is_page_locked(nav_page)
+        nav_label = f"🔒 {nav_page}" if locked else nav_page
 
-        if st.button(nav_page, use_container_width=True, type=button_type):
+        if st.button(nav_label, use_container_width=True, type=button_type, disabled=locked):
             st.session_state.current_page = nav_page
             st.rerun()
 
     page = st.session_state.current_page
+
+    active_locks = get_active_locks()
+    if active_locks and not is_instructor_unlocked():
+        st.markdown("---")
+        st.markdown('<div class="lock-status-card">🔒 Instructor locks active<br>' + ", ".join(active_locks[:4]) + ("..." if len(active_locks) > 4 else "") + '</div>', unsafe_allow_html=True)
+
+    # Instructor mode intentionally bypasses all locks. This button lets the instructor
+    # quickly test the student view in the same browser session.
+    if is_instructor_unlocked():
+        st.markdown("---")
+        st.markdown('<div class="lock-status-card">🧑‍🏫 Instructor mode active<br>Locks are bypassed for you.</div>', unsafe_allow_html=True)
+        if st.button("👤 Preview as student", use_container_width=True):
+            st.session_state.instructor_authenticated = False
+            # Stay on the current page so a locked page immediately shows the lock screen.
+            st.rerun()
 
     st.markdown("---")
 
@@ -1026,6 +1581,13 @@ with st.sidebar:
 
     if st.session_state.game_paused:
         st.warning("⏸ Game is paused")
+
+
+# If a page becomes locked while a student is already on it, show a lock screen.
+if is_page_locked(page):
+    render_locked_message(f"{page} is locked")
+    st.stop()
+
 
 
 if page == "🏠 Start":
@@ -1231,17 +1793,44 @@ elif page == "📝 Decision Log":
     done = st.session_state.completed_games
     departments = ["Purchasing", "Operations", "Sales", "Supply Chain"]
 
+    # If the selected department is locked by instructor settings or by the chosen role,
+    # automatically move to the first department that this student is allowed to open.
+    if is_department_access_locked(st.session_state.selected_department):
+        unlocked_departments = [department for department in departments if not is_department_access_locked(department)]
+        if unlocked_departments:
+            st.session_state.selected_department = unlocked_departments[0]
+
+    playable_departments = get_playable_departments()
+    required_departments = get_required_departments_for_round()
+
+    if not is_instructor_unlocked():
+        if len(playable_departments) == 0:
+            render_locked_message("No department is currently unlocked for this round")
+            st.stop()
+        elif len(playable_departments) < 4:
+            st.markdown(
+                f"""
+<div class="round-scope-card">
+<strong>{get_round_scope_label()}</strong><br>
+Required before finishing: {", ".join(required_departments)}.
+</div>
+""",
+                unsafe_allow_html=True,
+            )
+
     cols = st.columns(4)
     for i, (col, department) in enumerate(zip(cols, departments)):
-        status = "✅" if department in done else ("🔵" if i == len(done) else "⚪")
+        locked = is_department_access_locked(department)
+        status = "🔒" if locked else ("✅" if department in done else ("🔵" if i == len(done) else "⚪"))
         is_selected = st.session_state.selected_department == department
-        button_type = "primary" if is_selected else "secondary"
+        button_type = "primary" if is_selected and not locked else "secondary"
 
         if col.button(
             f"{status} {department}",
             key=f"department_button_{department}",
             use_container_width=True,
             type=button_type,
+            disabled=locked,
         ):
             st.session_state.selected_department = department
             st.rerun()
@@ -1249,6 +1838,10 @@ elif page == "📝 Decision Log":
     st.markdown("---")
 
     department_tab = st.session_state.selected_department
+
+    if is_department_access_locked(department_tab):
+        render_locked_message(get_department_lock_reason(department_tab))
+        st.stop()
 
     if department_tab == "Purchasing":
         st.subheader("🏭 Purchasing Department")
@@ -1543,14 +2136,35 @@ The current network is cost-efficient, but disruptions are increasing. The team 
     st.markdown("---")
 
     completed = len(st.session_state.completed_games)
+    required_departments = get_required_departments_for_round()
+    completed_required = get_completed_required_departments()
+    missing_required = [department for department in required_departments if department not in st.session_state.completed_games]
 
-    if completed < 4:
-        st.info(f"Complete all four departments before finishing the quarter. Progress: {completed}/4 department decisions completed.")
+    if len(get_playable_departments()) == 0 and not is_instructor_unlocked():
+        st.warning("No departments are currently unlocked. Ask the instructor to unlock at least one department.")
+    elif not is_round_complete():
+        st.info(
+            f"Complete the required department(s) before finishing the round. "
+            f"Progress: {len(completed_required)}/{len(required_departments)} completed. "
+            f"Still needed: {', '.join(missing_required)}."
+        )
     else:
-        st.success("All four department decisions have been completed. You can now finish this quarter.")
+        if st.session_state.get("lock_finish_quarter", False) and not is_instructor_unlocked():
+            st.warning("The instructor has locked the finish button. Wait until the class is ready to review the results.")
+            st.button("🔒 Finish round locked", type="primary", disabled=True)
+        else:
+            if len(required_departments) == 1:
+                st.success(f"{required_departments[0]} has been completed. You can now finish this department round.")
+                button_label = "➡️ Finish department round and view summary"
+            elif len(required_departments) < 4:
+                st.success("All unlocked departments have been completed. You can now finish this partial round.")
+                button_label = "➡️ Finish partial round and view summary"
+            else:
+                st.success("All four department decisions have been completed. You can now finish this quarter.")
+                button_label = "➡️ Finish quarter and view summary"
 
-        if st.button("➡️ Finish quarter and view summary", type="primary"):
-            show_quarter_summary()
+            if st.button(button_label, type="primary"):
+                show_quarter_summary()
 
 
 elif page == "📋 Quarter Summary":
@@ -1573,11 +2187,23 @@ elif page == "📋 Quarter Summary":
 
     with col_progress:
         st.markdown("### Department progress")
-        st.progress(completed / 4)
-        st.caption(f"{completed}/4 department decisions completed this quarter.")
+        required_departments = get_required_departments_for_round()
+        completed_required = get_completed_required_departments()
+        progress_value = len(completed_required) / len(required_departments) if required_departments else 0
+        st.progress(progress_value)
+        st.caption(
+            f"{len(completed_required)}/{len(required_departments)} required department(s) completed: "
+            f"{', '.join(required_departments)}"
+        )
 
     with col_status:
-        st.success("Quarter completed." if completed == 4 else "Quarter not fully completed.")
+        if is_round_complete():
+            if len(get_required_departments_for_round()) < 4:
+                st.success("Partial department round completed.")
+            else:
+                st.success("Quarter completed.")
+        else:
+            st.warning("Round not fully completed.")
 
     st.markdown("---")
 
@@ -1628,7 +2254,11 @@ elif page == "📋 Quarter Summary":
     else:
         st.info("No decisions have been made in this quarter yet.")
 
-    show_peer_comparison()
+    if st.session_state.get("lock_peer_comparison", False) and not is_instructor_unlocked():
+        st.markdown("---")
+        render_locked_message("Class comparison is locked")
+    else:
+        show_peer_comparison()
 
     st.markdown("---")
 
@@ -1875,6 +2505,15 @@ elif page == "👨‍🏫 Instructor view":
 
         st.stop()
 
+    logout_col, preview_col, _ = st.columns([1, 1, 2])
+    if logout_col.button("🔒 Lock instructor view again"):
+        st.session_state.instructor_authenticated = False
+        st.rerun()
+    if preview_col.button("👤 Preview as student"):
+        st.session_state.instructor_authenticated = False
+        st.session_state.current_page = "🏠 Start"
+        st.rerun()
+
     col_ev, col_ctrl = st.columns([1, 1])
 
     with col_ev:
@@ -1949,6 +2588,9 @@ elif page == "👨‍🏫 Instructor view":
                 st.success(f"✅ Event triggered: {name}. KPI impact applied.")
 
     with col_ctrl:
+        render_lock_panel()
+
+        st.markdown("---")
         st.markdown("### ⚙️ Game Controls")
 
         st.session_state.difficulty = st.selectbox(
@@ -2009,6 +2651,8 @@ elif page == "👨‍🏫 Instructor view":
                 "Supply Chain Risk",
                 "Active Event",
                 "Difficulty",
+                "Round scope",
+                "Playable departments",
                 "Learning Objective",
             ],
             "Value": [
@@ -2021,6 +2665,8 @@ elif page == "👨‍🏫 Instructor view":
                 f"{st.session_state.risk_level}/100",
                 st.session_state.event_label,
                 st.session_state.difficulty,
+                get_round_scope_label(),
+                ", ".join(get_playable_departments()) if get_playable_departments() else "None",
                 get_event_for_quarter(st.session_state.quarter)["learning_objective"],
             ],
         }
