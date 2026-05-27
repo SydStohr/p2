@@ -18,10 +18,10 @@ pip install streamlit
 ```
 
 ### Step 3 — Run the app
-Navigate to the folder where you saved `linklogistics_app.py` and run:
+Navigate to the folder where you saved `UPDATED_SYD.py` and run:
 
 ```
-streamlit run linklogistics_app.py
+streamlit run UPDATED_SYD.py
 ```
 
 Your browser will automatically open at: http://localhost:8501
@@ -29,7 +29,7 @@ Your browser will automatically open at: http://localhost:8501
 ---
 
 ## 📁 Files
-- `linklogistics_app.py` — the main app (this is all you need)
+- `UPDATED_SYD.py` — the main up-to-date app (this is all you need)
 - `requirements.txt` — lists the Python packages needed
 
 ---
